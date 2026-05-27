@@ -17,7 +17,7 @@ Eine Android-App zur Steuerung eines [Hyperion](https://github.com/hyperion-proj
 
 ## Kommunikation
 
-Die App kommuniziert über das **Hyperion Flat JSON TCP**-Protokoll (Standard-Port: **19333**) – kein HTTP, kein WebSocket. Jeder Befehl wird als newline-terminiertes JSON-Objekt über einen Raw-TCP-Socket gesendet.
+Die App kommuniziert über das **Hyperion Flat JSON TCP**-Protokoll – kein HTTP, kein WebSocket. Jeder Befehl wird als newline-terminiertes JSON-Objekt über einen Raw-TCP-Socket gesendet.
 
 Unterstützte Befehle:
 
@@ -31,7 +31,7 @@ Unterstützte Befehle:
 
 - Android 10 (API 29) oder neuer
 - Hyperion-Server im selben WLAN-Netzwerk
-- Flat JSON TCP Server in Hyperion aktiviert (Port 19333)
+- Flat JSON TCP Server in Hyperion aktiviert
 
 ## Build
 
