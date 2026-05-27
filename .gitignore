@@ -1,0 +1,28 @@
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Build-Ausgaben
+build/
+app/build/
+
+# Lokale Konfiguration (enthält SDK-Pfade – rechnerspezifisch)
+local.properties
+
+# Gradle-Cache (wird automatisch neu generiert)
+.gradle/
+
+# Keystore-Dateien (Sicherheitsrisiko!)
+*.jks
+*.keystore
+
+# Profiling / Log-Dateien
+*.hprof
+
+# macOS
+.DS_Store
+
+# Captures (Android Studio Profiler)
+captures/
