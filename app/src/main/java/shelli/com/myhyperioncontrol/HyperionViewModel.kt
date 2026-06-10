@@ -9,7 +9,6 @@ import android.os.Looper
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
@@ -51,9 +50,98 @@ class HyperionViewModel(application: Application) : AndroidViewModel(application
     var discoveredPort by mutableStateOf(0)
         private set
 
-    /** Vorschaufarbe (volle Helligkeit – unabhängig vom Slider) */
-    val previewColor: Color
-        get() = Color(android.graphics.Color.HSVToColor(floatArrayOf(hue, saturation, 1f)))
+    /** Name des zuletzt angewendeten Musters – null, wenn aktuell eine Einzelfarbe aktiv ist */
+    var activePatternName by mutableStateOf<String?>(null)
+        private set
+
+    // ── Farb-Presets ─────────────────────────────────────────────────────────
+    var presets by mutableStateOf(Array(5) { settings.getPreset(it) })
+        private set
+
+    fun savePreset(index: Int) {
+        val updated = presets.copyOf()
+        updated[index] = ColorPreset(hue, saturation, brightness)
+        settings.savePreset(index, updated[index]!!)
+        presets = updated
+        statusMessage = "Preset ${index + 1} gespeichert"
+    }
+
+    fun deletePreset(index: Int) {
+        val updated = presets.copyOf()
+        updated[index] = null
+        settings.deletePreset(index)
+        presets = updated
+        statusMessage = "Preset ${index + 1} gelöscht"
+    }
+
+    fun applyPreset(index: Int) {
+        val preset = presets[index] ?: return
+        hue        = preset.hue
+        saturation = preset.saturation
+        brightness = preset.brightness
+        isOn       = true
+        activePatternName = null
+        scheduleSendColor(immediate = true)
+    }
+
+    // ── LED-Muster ────────────────────────────────────────────────────────────
+    private val patternStore = PatternStore(application)
+    var patterns by mutableStateOf(patternStore.loadAll())
+        private set
+
+    fun capturePattern(name: String) {
+        viewModelScope.launch {
+            api.getLedPattern(settings.serverHost, settings.serverPort)
+                .onSuccess { leds ->
+                    if (leds.isEmpty()) { statusMessage = "Keine LED-Daten verfügbar"; return@onSuccess }
+                    patternStore.save(LedPattern(name, leds))
+                    patterns = patternStore.loadAll()
+                    statusMessage = "Muster \"$name\" gespeichert (${leds.size} LEDs)"
+                }
+                .onFailure { statusMessage = "Fehler: ${it.message}" }
+        }
+    }
+
+    fun applyPattern(pattern: LedPattern) {
+        viewModelScope.launch {
+            sendPattern(pattern)
+                .onSuccess {
+                    isOn = true
+                    activePatternName = pattern.name
+                    statusMessage = "Muster \"${pattern.name}\" aktiv ✓"
+                }
+                .onFailure { statusMessage = "Fehler: ${it.message}" }
+        }
+    }
+
+    /** Sendet ein Muster, dessen LED-Farben mit der aktuellen Helligkeit skaliert sind. */
+    private suspend fun sendPattern(pattern: LedPattern) =
+        api.setLedPattern(settings.serverHost, settings.serverPort, settings.priority, scaleLeds(pattern.leds, brightness))
+
+    /** Skaliert jeden RGB-Wert mit dem Helligkeitsfaktor (0.0–1.0), geclamped auf 0–255. */
+    private fun scaleLeds(leds: List<IntArray>, factor: Float): List<IntArray> =
+        leds.map { led ->
+            intArrayOf(
+                (led[0] * factor).toInt().coerceIn(0, 255),
+                (led[1] * factor).toInt().coerceIn(0, 255),
+                (led[2] * factor).toInt().coerceIn(0, 255)
+            )
+        }
+
+    fun deletePattern(pattern: LedPattern) {
+        patternStore.delete(pattern.name)
+        patterns = patternStore.loadAll()
+        if (activePatternName == pattern.name) activePatternName = null
+        statusMessage = "Muster \"${pattern.name}\" gelöscht"
+    }
+
+    fun renamePattern(pattern: LedPattern, newName: String) {
+        patternStore.delete(pattern.name)
+        patternStore.save(LedPattern(newName, pattern.leds))
+        patterns = patternStore.loadAll()
+        if (activePatternName == pattern.name) activePatternName = newName
+        statusMessage = "Muster umbenannt in \"$newName\""
+    }
 
     // ── Zuletzt gesendete Werte (null = noch nie gesendet) ───────────────────
     var lastSentR by mutableStateOf<Int?>(null)
@@ -90,17 +178,32 @@ class HyperionViewModel(application: Application) : AndroidViewModel(application
     fun onColorChanged(newHue: Float, newSaturation: Float) {
         hue = newHue
         saturation = newSaturation
+        activePatternName = null
         if (isOn) scheduleSendColor()   // Throttle: sofort + danach max. alle 80 ms
     }
 
     fun onBrightnessChanged(newBrightness: Float) {
         brightness = newBrightness
-        if (isOn) scheduleSendColor()
+        if (!isOn) return
+
+        val pattern = activePatternName?.let { name -> patterns.find { it.name == name } }
+        if (pattern != null) {
+            scheduleSendPattern(pattern)   // Helligkeit des aktiven Musters anpassen
+        } else {
+            scheduleSendColor()
+        }
     }
 
     fun turnOn() {
         isOn = true
-        scheduleSendColor(immediate = true)
+        // War beim letzten Ausschalten ein Muster aktiv, dieses wieder anwenden –
+        // sonst die zuletzt gewählte Einzelfarbe senden.
+        val pattern = activePatternName?.let { name -> patterns.find { it.name == name } }
+        if (pattern != null) {
+            applyPattern(pattern)
+        } else {
+            scheduleSendColor(immediate = true)
+        }
     }
 
     fun turnOff() {
@@ -151,6 +254,27 @@ class HyperionViewModel(application: Application) : AndroidViewModel(application
                     settings.lastHue        = hue
                     settings.lastSaturation = saturation
                     settings.lastBrightness = brightness
+                }
+                .onFailure { statusMessage = "Fehler: ${it.message}" }
+        }
+    }
+
+    /**
+     * Throttle-Logik analog zu [scheduleSendColor]: passt die Helligkeit des
+     * aktuell aktiven Musters an und sendet es erneut (max. alle 80 ms).
+     */
+    private fun scheduleSendPattern(pattern: LedPattern) {
+        sendJob?.cancel()
+        sendJob = viewModelScope.launch {
+            val elapsed = System.currentTimeMillis() - lastSendTimeMs
+            val wait    = (THROTTLE_MS - elapsed).coerceAtLeast(0L)
+            if (wait > 0L) delay(wait)
+            lastSendTimeMs = System.currentTimeMillis()
+
+            sendPattern(pattern)
+                .onSuccess {
+                    lastSentBrightnessPercent = (brightness * 100f).toInt()
+                    settings.lastBrightness   = brightness
                 }
                 .onFailure { statusMessage = "Fehler: ${it.message}" }
         }

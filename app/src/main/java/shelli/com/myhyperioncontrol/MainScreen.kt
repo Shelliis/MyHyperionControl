@@ -1,7 +1,10 @@
 package shelli.com.myhyperioncontrol
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -12,11 +15,22 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.sp
 
 /**
@@ -71,15 +85,31 @@ fun MainScreen(
                 onColorSelected = { h, s -> viewModel.onColorChanged(h, s) }
             )
 
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(16.dp))
 
-            // ── Farbvorschau ─────────────────────────────────────────────
-            Box(
-                modifier = Modifier
-                    .size(52.dp)
-                    .clip(CircleShape)
-                    .background(viewModel.previewColor)
-                    .border(2.dp, MaterialTheme.colorScheme.outline, CircleShape)
+            // ── Farb-Presets ──────────────────────────────────────────────
+            PresetButtonsRow(
+                presets           = viewModel.presets,
+                currentHue        = viewModel.hue,
+                currentSaturation = viewModel.saturation,
+                currentBrightness = viewModel.brightness,
+                isPatternActive   = viewModel.activePatternName != null,
+                onShortPress      = { viewModel.applyPreset(it) },
+                onSave            = { viewModel.savePreset(it) },
+                onDelete          = { viewModel.deletePreset(it) }
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            // ── Muster ───────────────────────────────────────────────────
+            PatternSection(
+                patterns          = viewModel.patterns,
+                isServerReachable = viewModel.isServerReachable,
+                activePatternName = viewModel.activePatternName,
+                onCapture         = { viewModel.capturePattern(it) },
+                onApply           = { viewModel.applyPattern(it) },
+                onDelete          = { viewModel.deletePattern(it) },
+                onRename          = { pattern, newName -> viewModel.renamePattern(pattern, newName) }
             )
 
             Spacer(Modifier.height(24.dp))
@@ -244,7 +274,10 @@ private fun ColorInfoPanel(viewModel: HyperionViewModel) {
     val g   = android.graphics.Color.green(colorInt)
     val b   = android.graphics.Color.blue(colorInt)
     val hex = "#%02X%02X%02X".format(r, g, b)
+    val rgb = "R $r  G $g  B $b"
     val brightnessPercent = (viewModel.brightness * 100f).toInt()
+
+    var showRgb by remember { mutableStateOf(false) }
 
     Surface(
         shape  = MaterialTheme.shapes.small,
@@ -255,8 +288,11 @@ private fun ColorInfoPanel(viewModel: HyperionViewModel) {
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            // Farbchip + Hex-Code
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            // Farbchip + Hex-Code / RGB-Werte (Klick wechselt die Anzeige)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.clickable { showRgb = !showRgb }
+            ) {
                 Box(
                     modifier = Modifier
                         .size(18.dp)
@@ -266,7 +302,7 @@ private fun ColorInfoPanel(viewModel: HyperionViewModel) {
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text  = hex,
+                    text  = if (showRgb) rgb else hex,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold
                 )
@@ -276,13 +312,6 @@ private fun ColorInfoPanel(viewModel: HyperionViewModel) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-            }
-
-            // RGB-Einzelwerte
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                RgbChip("R", r, Color(0xFFEF5350))
-                RgbChip("G", g, Color(0xFF66BB6A))
-                RgbChip("B", b, Color(0xFF42A5F5))
             }
 
             // Letzte Statusmeldung
@@ -297,19 +326,273 @@ private fun ColorInfoPanel(viewModel: HyperionViewModel) {
     }
 }
 
+// ── Preset-Buttons ────────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun RgbChip(label: String, value: Int, labelColor: Color) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+private fun PresetButtonsRow(
+    presets: Array<ColorPreset?>,
+    currentHue: Float,
+    currentSaturation: Float,
+    currentBrightness: Float,
+    isPatternActive: Boolean,
+    onShortPress: (Int) -> Unit,
+    onSave: (Int) -> Unit,
+    onDelete: (Int) -> Unit
+) {
+    val haptic = LocalHapticFeedback.current
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
+    ) {
+        for (index in 0 until 5) {
+            val preset = presets[index]
+            val bgColor = if (preset != null) {
+                Color(android.graphics.Color.HSVToColor(
+                    floatArrayOf(preset.hue, preset.saturation, preset.brightness)
+                ))
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant
+            }
+            // Helligkeit der Hintergrundfarbe bestimmt die Textfarbe
+            val luminance = 0.2126f * bgColor.red + 0.7152f * bgColor.green + 0.0722f * bgColor.blue
+            val textColor = if (luminance > 0.45f) Color.Black else Color.White
+
+            // Halo, wenn dieses Preset der aktuell aktiven Farbe entspricht
+            val isSelected = !isPatternActive && preset != null &&
+                preset.hue == currentHue &&
+                preset.saturation == currentSaturation &&
+                preset.brightness == currentBrightness
+
+            var showMenu by remember { mutableStateOf(false) }
+
+            Box {
+                Box(
+                    modifier = Modifier
+                        .shadow(
+                            elevation   = if (isSelected) 8.dp else 0.dp,
+                            shape       = CircleShape,
+                            ambientColor = Color.White,
+                            spotColor    = Color.White
+                        )
+                        .size(52.dp)
+                        .clip(CircleShape)
+                        .background(bgColor)
+                        .border(
+                            width = if (isSelected) 3.dp
+                                    else if (preset != null) 2.dp else 1.dp,
+                            color = if (isSelected) Color.White
+                                    else if (preset != null) MaterialTheme.colorScheme.outline
+                                    else MaterialTheme.colorScheme.outlineVariant,
+                            shape = CircleShape
+                        )
+                        .combinedClickable(
+                            onClick = { onShortPress(index) },
+                            onLongClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                showMenu = true
+                            }
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text       = if (preset != null) "${index + 1}" else "+",
+                        color      = if (preset != null) textColor
+                                     else MaterialTheme.colorScheme.onSurfaceVariant,
+                        style      = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                DropdownMenu(
+                    expanded         = showMenu,
+                    onDismissRequest = { showMenu = false }
+                ) {
+                    DropdownMenuItem(
+                        text    = { Text("Speichern") },
+                        onClick = { showMenu = false; onSave(index) }
+                    )
+                    DropdownMenuItem(
+                        text    = { Text("Löschen", color = MaterialTheme.colorScheme.error) },
+                        enabled = preset != null,
+                        onClick = { showMenu = false; onDelete(index) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ── Muster-Abschnitt ─────────────────────────────────────────────────────────
+
+@Composable
+private fun PatternSection(
+    patterns: List<LedPattern>,
+    isServerReachable: Boolean,
+    activePatternName: String?,
+    onCapture: (String) -> Unit,
+    onApply: (LedPattern) -> Unit,
+    onDelete: (LedPattern) -> Unit,
+    onRename: (LedPattern, String) -> Unit
+) {
+    var showDialog by remember { mutableStateOf(false) }
+    var nameInput  by remember { mutableStateOf("") }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
         Text(
-            text  = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = labelColor,
-            fontWeight = FontWeight.Bold
+            text       = "Muster",
+            style      = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            modifier   = Modifier.padding(bottom = 8.dp)
         )
-        Spacer(Modifier.width(3.dp))
-        Text(
-            text  = value.toString(),
-            style = MaterialTheme.typography.bodySmall
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding        = PaddingValues(end = 4.dp)
+        ) {
+            items(patterns) { pattern ->
+                PatternCard(
+                    pattern  = pattern,
+                    enabled  = isServerReachable,
+                    isActive = pattern.name == activePatternName,
+                    onApply  = { onApply(pattern) },
+                    onDelete = { onDelete(pattern) },
+                    onRename = { newName -> onRename(pattern, newName) }
+                )
+            }
+            item {
+                OutlinedButton(
+                    onClick  = { nameInput = ""; showDialog = true },
+                    enabled  = isServerReachable,
+                    modifier = Modifier.height(52.dp)
+                ) {
+                    Text("+ Muster", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+    }
+
+    if (showDialog) {
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text("Muster benennen") },
+            text  = {
+                OutlinedTextField(
+                    value         = nameInput,
+                    onValueChange = { nameInput = it },
+                    label         = { Text("Name") },
+                    singleLine    = true
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick  = { onCapture(nameInput.trim()); showDialog = false },
+                    enabled  = nameInput.isNotBlank()
+                ) { Text("Speichern") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDialog = false }) { Text("Abbrechen") }
+            }
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun PatternCard(
+    pattern: LedPattern,
+    enabled: Boolean,
+    isActive: Boolean,
+    onApply: () -> Unit,
+    onDelete: () -> Unit,
+    onRename: (String) -> Unit
+) {
+    var showMenu        by remember { mutableStateOf(false) }
+    var showRenameDialog by remember { mutableStateOf(false) }
+    var renameInput     by remember { mutableStateOf(pattern.name) }
+    val haptic = LocalHapticFeedback.current
+
+    Box {
+        ElevatedCard(
+            modifier = Modifier
+                .width(110.dp)
+                .shadow(
+                    elevation    = if (isActive) 8.dp else 0.dp,
+                    shape        = MaterialTheme.shapes.medium,
+                    ambientColor = Color.White,
+                    spotColor    = Color.White
+                )
+                .let {
+                    if (isActive) it.border(2.dp, Color.White, MaterialTheme.shapes.medium) else it
+                }
+                .combinedClickable(
+                    enabled     = enabled,
+                    onClick     = onApply,
+                    onLongClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        showMenu = true
+                    }
+                )
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(horizontal = 8.dp, vertical = 10.dp)
+                    .alpha(if (enabled) 1f else 0.4f),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text       = pattern.name,
+                    style      = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium,
+                    maxLines   = 2,
+                    overflow   = TextOverflow.Ellipsis,
+                    textAlign  = TextAlign.Center,
+                    modifier   = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 32.dp)
+                )
+            }
+        }
+
+        DropdownMenu(
+            expanded         = showMenu,
+            onDismissRequest = { showMenu = false }
+        ) {
+            DropdownMenuItem(
+                text    = { Text("Umbenennen") },
+                onClick = {
+                    showMenu   = false
+                    renameInput = pattern.name
+                    showRenameDialog = true
+                }
+            )
+            DropdownMenuItem(
+                text    = { Text("Löschen", color = MaterialTheme.colorScheme.error) },
+                onClick = { showMenu = false; onDelete() }
+            )
+        }
+    }
+
+    if (showRenameDialog) {
+        AlertDialog(
+            onDismissRequest = { showRenameDialog = false },
+            title = { Text("Umbenennen") },
+            text  = {
+                OutlinedTextField(
+                    value         = renameInput,
+                    onValueChange = { renameInput = it },
+                    label         = { Text("Name") },
+                    singleLine    = true
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick  = { onRename(renameInput.trim()); showRenameDialog = false },
+                    enabled  = renameInput.isNotBlank()
+                ) { Text("OK") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRenameDialog = false }) { Text("Abbrechen") }
+            }
         )
     }
 }

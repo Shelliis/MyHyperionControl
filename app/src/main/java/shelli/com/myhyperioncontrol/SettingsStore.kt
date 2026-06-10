@@ -2,6 +2,8 @@ package shelli.com.myhyperioncontrol
 
 import android.content.Context
 
+data class ColorPreset(val hue: Float, val saturation: Float, val brightness: Float)
+
 /**
  * Speichert Server-Verbindungsparameter dauerhaft in SharedPreferences.
  */
@@ -50,4 +52,28 @@ class SettingsStore(context: Context) {
     var lastBrightness: Float
         get() = Float.fromBits(prefs.getInt("last_bri", 1f.toBits()))   // 1 = voll
         set(value) { prefs.edit().putInt("last_bri", value.toBits()).apply() }
+
+    // ── Farb-Presets (5 Slots, Index 0–4) ───────────────────────────────────
+
+    fun getPreset(index: Int): ColorPreset? {
+        if (!prefs.getBoolean("preset_${index}_set", false)) return null
+        return ColorPreset(
+            hue        = Float.fromBits(prefs.getInt("preset_${index}_hue", 0f.toBits())),
+            saturation = Float.fromBits(prefs.getInt("preset_${index}_sat", 0f.toBits())),
+            brightness = Float.fromBits(prefs.getInt("preset_${index}_bri", 1f.toBits()))
+        )
+    }
+
+    fun savePreset(index: Int, preset: ColorPreset) {
+        prefs.edit()
+            .putBoolean("preset_${index}_set", true)
+            .putInt("preset_${index}_hue", preset.hue.toBits())
+            .putInt("preset_${index}_sat", preset.saturation.toBits())
+            .putInt("preset_${index}_bri", preset.brightness.toBits())
+            .apply()
+    }
+
+    fun deletePreset(index: Int) {
+        prefs.edit().putBoolean("preset_${index}_set", false).apply()
+    }
 }
