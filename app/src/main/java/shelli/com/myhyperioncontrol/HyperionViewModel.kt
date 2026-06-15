@@ -2,11 +2,13 @@ package shelli.com.myhyperioncontrol
 
 import android.app.Application
 import android.content.Context
+import android.net.Uri
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Handler
 import android.os.Looper
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
@@ -141,6 +143,61 @@ class HyperionViewModel(application: Application) : AndroidViewModel(application
         patterns = patternStore.loadAll()
         if (activePatternName == pattern.name) activePatternName = newName
         statusMessage = "Muster umbenannt in \"$newName\""
+    }
+
+    // ── Sicherung (Export/Import) ───────────────────────────────────────────
+    /** Erhöht sich nach jedem erfolgreichen Import – Signal für die UI, Formularfelder neu zu laden. */
+    var importCounter by mutableIntStateOf(0)
+        private set
+
+    fun exportToUri(uri: Uri) {
+        viewModelScope.launch {
+            runCatching {
+                val json = BackupManager.export(settings, presets, patterns)
+                getApplication<Application>().contentResolver.openOutputStream(uri)
+                    ?.use { it.write(json.toByteArray()) }
+                    ?: error("Konnte Datei nicht öffnen")
+            }
+                .onSuccess { statusMessage = "Sicherung exportiert ✓" }
+                .onFailure { statusMessage = "Export fehlgeschlagen: ${it.message}" }
+        }
+    }
+
+    fun importFromUri(uri: Uri) {
+        viewModelScope.launch {
+            runCatching {
+                val json = getApplication<Application>().contentResolver.openInputStream(uri)
+                    ?.use { it.bufferedReader().readText() }
+                    ?: error("Konnte Datei nicht öffnen")
+                BackupManager.import(json).getOrThrow()
+            }
+                .onSuccess { applyImport(it) }
+                .onFailure { statusMessage = "Import fehlgeschlagen: ${it.message}" }
+        }
+    }
+
+    private fun applyImport(result: BackupManager.ImportResult) {
+        result.serverHost?.let { settings.serverHost = it; settings.isConfigured = true }
+        result.serverPort?.let { settings.serverPort = it }
+        result.priority?.let { settings.priority = it }
+
+        for (i in result.presets.indices) {
+            val preset = result.presets[i]
+            if (preset != null) settings.savePreset(i, preset) else settings.deletePreset(i)
+        }
+        presets = Array(5) { settings.getPreset(it) }
+
+        patternStore.loadAll().forEach { patternStore.delete(it.name) }
+        result.patterns.forEach { patternStore.save(it) }
+        patterns = patternStore.loadAll()
+
+        if (activePatternName != null && patterns.none { it.name == activePatternName }) {
+            activePatternName = null
+        }
+
+        checkReachabilityNow()
+        importCounter++
+        statusMessage = "Sicherung importiert ✓"
     }
 
     // ── Zuletzt gesendete Werte (null = noch nie gesendet) ───────────────────

@@ -439,12 +439,6 @@ private fun PatternSection(
     var nameInput  by remember { mutableStateOf("") }
 
     Column(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            text       = "Muster",
-            style      = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-            modifier   = Modifier.padding(bottom = 8.dp)
-        )
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding        = PaddingValues(end = 4.dp)
@@ -533,11 +527,13 @@ private fun PatternCard(
                     }
                 )
         ) {
-            Column(
+            Box(
                 modifier = Modifier
                     .padding(horizontal = 8.dp, vertical = 10.dp)
-                    .alpha(if (enabled) 1f else 0.4f),
-                horizontalAlignment = Alignment.CenterHorizontally
+                    .alpha(if (enabled) 1f else 0.4f)
+                    .fillMaxWidth()
+                    .heightIn(min = 32.dp),
+                contentAlignment = Alignment.Center
             ) {
                 Text(
                     text       = pattern.name,
@@ -546,9 +542,7 @@ private fun PatternCard(
                     maxLines   = 2,
                     overflow   = TextOverflow.Ellipsis,
                     textAlign  = TextAlign.Center,
-                    modifier   = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 32.dp)
+                    modifier   = Modifier.fillMaxWidth()
                 )
             }
         }
